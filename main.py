@@ -97,6 +97,20 @@ def _ensure_kaggle_auth() -> tuple[str | None, str | None]:
     return username, key
 
 
+def _ensure_kaggle_config_exists():
+    """Create dummy kaggle.json if it doesn't exist to prevent import errors."""
+    kaggle_dir = Path.home() / ".kaggle"
+    kaggle_json = kaggle_dir / "kaggle.json"
+    
+    if not kaggle_json.exists():
+        kaggle_dir.mkdir(parents=True, exist_ok=True)
+        kaggle_json.write_text('{"username":"","key":""}')
+        try:
+            os.chmod(kaggle_json, 0o600)
+        except Exception:
+            pass
+
+
 @st.cache_resource(show_spinner=True)
 def download_kaggle_dataset(slug: str) -> str:
     """Download a Kaggle dataset and return the extraction directory.
@@ -104,6 +118,9 @@ def download_kaggle_dataset(slug: str) -> str:
     As of April 2024, public datasets can be downloaded without authentication.
     See: https://www.kaggle.com/discussions/product-announcements/485439
     """
+    # Ensure kaggle.json exists before import to prevent errors
+    _ensure_kaggle_config_exists()
+    
     # Import here to avoid authentication check at module load time
     from kaggle.api.kaggle_api_extended import KaggleApi
     
