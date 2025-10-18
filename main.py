@@ -288,7 +288,7 @@ def _build_embeddings(documents: list[str]) -> np.ndarray:
     return dense
 
 
-@st.cache_resource(show_spinner=True)
+@st.cache_resource(show_spinner=True, hash_funcs={tuple: lambda x: hash(str(x))})
 def fit_bertopic(
     documents: tuple[str, ...],
     min_size: int,
