@@ -20,7 +20,6 @@ import plotly.express as px
 import plotly.io as pio
 import streamlit as st
 from bertopic import BERTopic
-from kaggle.api.kaggle_api_extended import KaggleApi
 from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 
@@ -88,27 +87,39 @@ def _get_kaggle_credentials() -> tuple[str | None, str | None]:
     return username, key
 
 
-def _ensure_kaggle_auth() -> tuple[str, str]:
+def _ensure_kaggle_auth() -> tuple[str | None, str | None]:
+    """Get Kaggle credentials if available, but don't require them for public datasets."""
     username, key = _get_kaggle_credentials()
-    if not username or not key:
-        raise RuntimeError(
-            "Missing Kaggle credentials. Add them via Streamlit secrets (kaggle.username / kaggle.key) "
-            "or environment variables KAGGLE_USERNAME / KAGGLE_KEY."
-        )
-    os.environ["KAGGLE_USERNAME"] = username
-    os.environ["KAGGLE_KEY"] = key
-    _write_kaggle_json(username, key)
+    if username and key:
+        os.environ["KAGGLE_USERNAME"] = username
+        os.environ["KAGGLE_KEY"] = key
+        _write_kaggle_json(username, key)
     return username, key
 
 
 @st.cache_resource(show_spinner=True)
 def download_kaggle_dataset(slug: str) -> str:
-    """Download a Kaggle dataset and return the extraction directory."""
+    """Download a Kaggle dataset and return the extraction directory.
+    
+    As of April 2024, public datasets can be downloaded without authentication.
+    See: https://www.kaggle.com/discussions/product-announcements/485439
+    """
+    # Import here to avoid authentication check at module load time
+    from kaggle.api.kaggle_api_extended import KaggleApi
+    
     if not slug:
         raise ValueError("Please provide a Kaggle dataset slug.")
     target = Path(tempfile.mkdtemp(prefix="police_topics_kaggle_"))
     api = KaggleApi()
-    api.authenticate()
+    
+    # Try to authenticate if credentials are available, but don't fail if they're not
+    # Public datasets can be downloaded without authentication
+    try:
+        api.authenticate()
+    except (OSError, IOError):
+        # No credentials found, but that's OK for public datasets
+        pass
+    
     try:
         api.dataset_download_files(slug, path=str(target), unzip=True, quiet=True)
     except Exception as exc:  # pragma: no cover - delegate to UI
@@ -142,17 +153,16 @@ def load_data(folder: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd
 # ---------------------------------------------------------------------------
 st.sidebar.title("Controls")
 
-has_creds = all(_get_kaggle_credentials())
 data_source = st.sidebar.radio(
     "Data source",
     options=["Download from Kaggle", "Use bundled sample dataset"],
-    index=0 if has_creds else 1,
+    index=0,  # Default to Kaggle download
 )
 
 dataset_slug = st.sidebar.text_input(
     "Kaggle dataset slug",
     value=os.environ.get("KAGGLE_DATASET", "crimsoneer/uk-police-neighbourhoods-priorities-and-events"),
-    help="Format owner/dataset. Requires Kaggle API credentials in Streamlit secrets.",
+    help="Format owner/dataset. Public datasets can be downloaded without credentials.",
 )
 
 with st.sidebar.expander("Model options"):
@@ -165,8 +175,9 @@ with st.sidebar.expander("Filters"):
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
-    "Set kaggle.username and kaggle.key in Streamlit secrets to download automatically. "
-    "Switch to the bundled sample if you just want a quick demo."
+    "Public datasets can be downloaded without credentials. "
+    "For private datasets, set kaggle.username and kaggle.key in Streamlit secrets. "
+    "Switch to the bundled sample for a quick demo."
 )
 
 
@@ -322,10 +333,20 @@ info = topic_model.get_topic_info()
 label_col = "Representation" if "Representation" in info.columns else ("Name" if "Name" in info.columns else None)
 if label_col:
     info = info.rename(columns={label_col: "label"})
+    # Ensure label is a string, not a list
+    info["label"] = info["label"].apply(lambda x: str(x) if not isinstance(x, str) else x)
 else:
-    info["label"] = info["Topic"].apply(
-        lambda tid: " / ".join([word for (word, _score) in (topic_model.get_topic(tid) or [])[:3]]) if tid != -1 else "Outliers"
-    )
+    def create_label(tid):
+        if tid == -1:
+            return "Outliers"
+        topic_words = topic_model.get_topic(tid)
+        if not topic_words:
+            return f"Topic {tid}"
+        # Extract just the words (first element of each tuple) and join them
+        words = [word for (word, _score) in topic_words[:3]]
+        return " / ".join(words)
+    
+    info["label"] = info["Topic"].apply(create_label)
 
 texts_df = texts_df.reset_index(drop=True)
 texts_df["topic"] = topics
@@ -380,40 +401,107 @@ st.caption(f"Top words: {word_summary}")
 st.subheader("Map: Topic distribution")
 
 map_color_mode = st.radio("Map colour", ["Topic label", "Days since update"], horizontal=True)
-map_df = df_topics.copy()
-map_df["snippet"] = map_df["text"].fillna("").str.slice(0, 160) + np.where(map_df["text"].fillna("").str.len() > 160, "…", "")
 
-has_geo = map_df["lat"].notna().sum() > 2
-if has_geo:
-    if map_color_mode == "Topic label":
-        fig_map = px.scatter_mapbox(
-            map_df.dropna(subset=["lat", "lon"]).sample(frac=1.0, random_state=42),
-            lat="lat",
-            lon="lon",
-            color="label",
-            hover_data={"force_id": True, "neighbourhood_id": True, "label": True, "snippet": True},
-            zoom=5,
-            height=600,
-        )
+# Build GeoJSON from boundary polygons
+if not df_bounds.empty and {"force_id", "neighbourhood_id", "latitude", "longitude"}.issubset(df_bounds.columns):
+    # Group boundaries by neighbourhood to create polygons
+    df_bounds_clean = df_bounds.dropna(subset=["latitude", "longitude"]).copy()
+    
+    # Aggregate topic data per neighbourhood
+    topic_summary = df_topics.groupby(["force_id", "neighbourhood_id"]).agg({
+        "label": lambda x: x.mode()[0] if len(x.mode()) > 0 else "Unknown",  # Most common topic
+        "topic": "count",  # Number of priorities
+        "best_date": "max"  # Most recent date
+    }).reset_index()
+    topic_summary.columns = ["force_id", "neighbourhood_id", "dominant_topic", "priority_count", "latest_date"]
+    
+    # Create GeoJSON features
+    features = []
+    for (force_id, neigh_id), group in df_bounds_clean.groupby(["force_id", "neighbourhood_id"]):
+        coords = [[float(row["longitude"]), float(row["latitude"])] for _, row in group.iterrows()]
+        
+        # Close the polygon if not already closed
+        if coords and coords[0] != coords[-1]:
+            coords.append(coords[0])
+        
+        # Get topic info for this neighbourhood
+        topic_info = topic_summary[
+            (topic_summary["force_id"] == force_id) & 
+            (topic_summary["neighbourhood_id"] == neigh_id)
+        ]
+        
+        if not topic_info.empty:
+            properties = {
+                "force_id": force_id,
+                "neighbourhood_id": neigh_id,
+                "dominant_topic": topic_info.iloc[0]["dominant_topic"],
+                "priority_count": int(topic_info.iloc[0]["priority_count"]),
+                "latest_date": str(topic_info.iloc[0]["latest_date"]),
+                "id": f"{force_id}_{neigh_id}"
+            }
+            
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [coords]
+                },
+                "properties": properties,
+                "id": properties["id"]
+            })
+    
+    geojson = {
+        "type": "FeatureCollection",
+        "features": features
+    }
+    
+    if features:
+        # Create dataframe for choropleth
+        map_data = pd.DataFrame([f["properties"] for f in features])
+        
+        if map_color_mode == "Topic label":
+            fig_map = px.choropleth_map(
+                map_data,
+                geojson=geojson,
+                locations="id",
+                color="dominant_topic",
+                hover_data=["force_id", "neighbourhood_id", "dominant_topic", "priority_count"],
+                basemap_visible=True,
+                zoom=5,
+                center={"lat": 54.5, "lon": -2},
+                opacity=0.6,
+                height=600,
+                labels={"dominant_topic": "Topic"}
+            )
+            fig_map.update_layout(mapbox_style="carto-darkmatter")
+        else:
+            # Calculate days since update
+            map_data["latest_date"] = pd.to_datetime(map_data["latest_date"], utc=True)
+            map_data["days_since"] = (pd.Timestamp.now(tz="UTC") - map_data["latest_date"]).dt.days
+            
+            fig_map = px.choropleth_map(
+                map_data,
+                geojson=geojson,
+                locations="id",
+                color="days_since",
+                hover_data=["force_id", "neighbourhood_id", "dominant_topic", "days_since"],
+                basemap_visible=True,
+                zoom=5,
+                center={"lat": 54.5, "lon": -2},
+                opacity=0.6,
+                height=600,
+                color_continuous_scale="Viridis_r",
+                labels={"days_since": "Days Since Update"}
+            )
+            fig_map.update_layout(mapbox_style="carto-darkmatter")
+        
+        fig_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
+        st.plotly_chart(fig_map, use_container_width=True)
     else:
-        tmp = map_df.dropna(subset=["lat", "lon"]).copy()
-        tmp["best_date"] = pd.to_datetime(tmp["best_date"], utc=True)
-        tmp["days_since"] = (pd.Timestamp.now(tz="UTC") - tmp["best_date"]).dt.days
-        fig_map = px.scatter_mapbox(
-            tmp.sample(frac=1.0, random_state=42),
-            lat="lat",
-            lon="lon",
-            color="days_since",
-            color_continuous_scale="Viridis_r",
-            hover_data={"force_id": True, "neighbourhood_id": True, "days_since": True, "label": True, "snippet": True},
-            zoom=5,
-            height=600,
-        )
-    fig_map.update_layout(mapbox_style="carto-darkmatter")
-    st.plotly_chart(fig_map, use_container_width=True)
+        st.warning("No valid boundary polygons found for visualization.")
 else:
-    st.info("No neighbourhood coordinates available — showing a force-level treemap instead.")
-    fallback = map_df.groupby(["force_id", "label"], dropna=False).size().reset_index(name="count")
+    st.info("No neighbourhood boundaries available — showing a force-level treemap instead.")
+    fallback = df_topics.groupby(["force_id", "label"], dropna=False).size().reset_index(name="count")
     st.plotly_chart(px.treemap(fallback, path=["force_id", "label"], values="count", height=600), use_container_width=True)
 
 
