@@ -113,11 +113,11 @@ def download_kaggle_dataset(slug: str) -> str:
     api = KaggleApi()
     
     # Try to authenticate if credentials are available, but don't fail if they're not
-    # Public datasets can be downloaded without authentication
+    # Public datasets can be downloaded without authentication (as of April 2024)
     try:
         api.authenticate()
-    except (OSError, IOError):
-        # No credentials found, but that's OK for public datasets
+    except Exception:
+        # No credentials found or authentication failed, but that's OK for public datasets
         pass
     
     try:
