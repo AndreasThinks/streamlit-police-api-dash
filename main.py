@@ -421,24 +421,41 @@ map_color_mode = st.radio("Map colour", ["Topic label", "Days since update"], ho
 
 # Build GeoJSON from boundary polygons
 if not df_bounds.empty and {"force_id", "neighbourhood_id", "latitude", "longitude"}.issubset(df_bounds.columns):
-    # Group boundaries by neighbourhood to create polygons
-    df_bounds_clean = df_bounds.dropna(subset=["latitude", "longitude"]).copy()
-    
-    # Aggregate topic data per neighbourhood
+    # Aggregate topic data per neighbourhood first
     topic_summary = df_topics.groupby(["force_id", "neighbourhood_id"]).agg({
-        "label": lambda x: x.mode()[0] if len(x.mode()) > 0 else "Unknown",  # Most common topic
-        "topic": "count",  # Number of priorities
-        "best_date": "max"  # Most recent date
+        "label": lambda x: x.mode()[0] if len(x.mode()) > 0 else "Unknown",
+        "topic": "count",
+        "best_date": "max"
     }).reset_index()
     topic_summary.columns = ["force_id", "neighbourhood_id", "dominant_topic", "priority_count", "latest_date"]
     
+    # Only show top 500 neighborhoods by priority count to save memory
+    top_neighborhoods = topic_summary.nlargest(500, "priority_count")
+    
+    # Filter boundaries to only include top neighborhoods
+    df_bounds_filtered = df_bounds.merge(
+        top_neighborhoods[["force_id", "neighbourhood_id"]], 
+        on=["force_id", "neighbourhood_id"]
+    ).dropna(subset=["latitude", "longitude"])
+    
     # Create GeoJSON features
     features = []
-    for (force_id, neigh_id), group in df_bounds_clean.groupby(["force_id", "neighbourhood_id"]):
-        coords = [[float(row["longitude"]), float(row["latitude"])] for _, row in group.iterrows()]
+    for (force_id, neigh_id), group in df_bounds_filtered.groupby(["force_id", "neighbourhood_id"]):
+        # Simplify polygon by sampling points (reduce memory by ~80%)
+        coords_list = [[float(row["longitude"]), float(row["latitude"])] for _, row in group.iterrows()]
         
+        # Sample every 5th point if polygon has more than 50 points
+        if len(coords_list) > 50:
+            coords = coords_list[::5]
+        else:
+            coords = coords_list
+        
+        # Ensure we have at least 3 points for a valid polygon
+        if len(coords) < 3:
+            continue
+            
         # Close the polygon if not already closed
-        if coords and coords[0] != coords[-1]:
+        if coords[0] != coords[-1]:
             coords.append(coords[0])
         
         # Get topic info for this neighbourhood
@@ -466,6 +483,9 @@ if not df_bounds.empty and {"force_id", "neighbourhood_id", "latitude", "longitu
                 "properties": properties,
                 "id": properties["id"]
             })
+    
+    # Clean up to free memory
+    del df_bounds_filtered
     
     geojson = {
         "type": "FeatureCollection",
