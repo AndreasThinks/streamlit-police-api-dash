@@ -483,14 +483,13 @@ if not df_bounds.empty and {"force_id", "neighbourhood_id", "latitude", "longitu
                 locations="id",
                 color="dominant_topic",
                 hover_data=["force_id", "neighbourhood_id", "dominant_topic", "priority_count"],
-                basemap_visible=True,
+                map_style="carto-darkmatter",
                 zoom=5,
                 center={"lat": 54.5, "lon": -2},
                 opacity=0.6,
                 height=600,
                 labels={"dominant_topic": "Topic"}
             )
-            fig_map.update_layout(mapbox_style="carto-darkmatter")
         else:
             # Calculate days since update
             map_data["latest_date"] = pd.to_datetime(map_data["latest_date"], utc=True)
@@ -502,7 +501,7 @@ if not df_bounds.empty and {"force_id", "neighbourhood_id", "latitude", "longitu
                 locations="id",
                 color="days_since",
                 hover_data=["force_id", "neighbourhood_id", "dominant_topic", "days_since"],
-                basemap_visible=True,
+                map_style="carto-darkmatter",
                 zoom=5,
                 center={"lat": 54.5, "lon": -2},
                 opacity=0.6,
@@ -510,7 +509,6 @@ if not df_bounds.empty and {"force_id", "neighbourhood_id", "latitude", "longitu
                 color_continuous_scale="Viridis_r",
                 labels={"days_since": "Days Since Update"}
             )
-            fig_map.update_layout(mapbox_style="carto-darkmatter")
         
         fig_map.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0})
         st.plotly_chart(fig_map, use_container_width=True)
