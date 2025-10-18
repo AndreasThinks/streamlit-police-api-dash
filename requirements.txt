@@ -7,3 +7,6 @@ umap-learn>=0.5.5
 hdbscan>=0.8.33
 bertopic>=0.16
 kaggle>=1.6
+
+# Prevent heavy torch/transformers dependencies
+# BERTopic will work with custom embeddings (TF-IDF) without sentence-transformers
