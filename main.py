@@ -272,13 +272,20 @@ def _build_embeddings(documents: list[str]) -> np.ndarray:
     """Create lightweight TF-IDF based embeddings suitable for BERTopic."""
     tfidf = TfidfVectorizer(stop_words="english", max_features=5000, ngram_range=(1, 2))
     matrix = tfidf.fit_transform(documents)
-    if matrix.shape[0] < 2 or matrix.shape[1] < 2:
-        return matrix.toarray()
-    max_components = min(100, matrix.shape[1] - 1, matrix.shape[0] - 1)
-    if max_components < 2:
-        return matrix.toarray()
-    reducer = TruncatedSVD(n_components=max_components, random_state=42)
-    return reducer.fit_transform(matrix)
+    dense = matrix.astype(np.float32).toarray()
+    if dense.shape[0] < 2:
+        return dense
+    max_components = min(100, dense.shape[1], dense.shape[0] - 1)
+    if max_components >= 2:
+        reducer = TruncatedSVD(n_components=max_components, random_state=42)
+        reduced = reducer.fit_transform(dense)
+        if reduced.shape[1] >= 2:
+            return reduced.astype(np.float32)
+    # Ensure at least two dimensions for UMAP/HDBSCAN downstream
+    if dense.shape[1] < 2:
+        pad_width = 2 - dense.shape[1]
+        dense = np.hstack([dense, np.zeros((dense.shape[0], pad_width), dtype=np.float32)])
+    return dense
 
 
 @st.cache_resource(show_spinner=True)
