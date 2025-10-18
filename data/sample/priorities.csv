@@ -1,0 +1,6 @@
+force_id,neighbourhood_id,issue,action,issue_date,action_date,scrape_date
+avon-and-somerset,bristol-001,Drug dealing around the park,Conduct targeted patrols with plain clothes officers,2024-01-15T00:00:00Z,2024-02-10T00:00:00Z,2024-03-01T00:00:00Z
+avon-and-somerset,bristol-002,Increase in antisocial behaviour near the high street,Partner with local council to install better lighting and run youth outreach,2024-01-22T00:00:00Z,2024-03-05T00:00:00Z,2024-03-12T00:00:00Z
+city-of-london,city-001,Reports of bike thefts at major transit hubs,Deploy additional CCTV monitoring and bike marking events,2024-02-02T00:00:00Z,2024-02-28T00:00:00Z,2024-03-06T00:00:00Z
+metropolitan,camden-003,Spate of burglaries in residential streets,Run door-to-door crime prevention visits and coordinate with neighbourhood watch,2024-02-15T00:00:00Z,2024-03-20T00:00:00Z,2024-03-25T00:00:00Z
+metropolitan,camden-004,Concerns about dangerous driving on the high road,Set up mobile speed camera operations and community speed watch,2024-03-01T00:00:00Z,2024-04-04T00:00:00Z,2024-04-10T00:00:00Z
